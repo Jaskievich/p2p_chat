@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>P2P Видео Чат — MQTT Signalling (Исправлен)</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            min-height: 100vh;
+            padding: 16px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        @media (min-width: 768px) {
+            .video-grid {
+                display: flex;
+                gap: 20px;
+            }
+        }
+        .video-card {
+            flex: 1;
+            background: #000000aa;
+            border-radius: 24px;
+            overflow: hidden;
+            position: relative;
+            aspect-ratio: 4/3;
+            background: #1a1a2e;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .video-label {
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            background: rgba(0,0,0,0.6);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            backdrop-filter: blur(4px);
+        }
+        .chat-panel {
+            background: white;
+            border-radius: 24px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            height: 350px;
+        }
+        .messages-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            background: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .message {
+            max-width: 80%;
+            padding: 8px 14px;
+            border-radius: 18px;
+            font-size: 14px;
+        }
+        .message-sent {
+            background: #3b82f6;
+            color: white;
+            align-self: flex-end;
+        }
+        .message-received {
+            background: white;
+            border: 1px solid #e2e8f0;
+            align-self: flex-start;
+        }
+        .system-message {
+            text-align: center;
+            color: #64748b;
+            font-size: 12px;
+            margin: 8px 0;
+        }
+        .input-area {
+            display: flex;
+            gap: 12px;
+            padding: 16px;
+            background: white;
+            border-top: 1px solid #e2e8f0;
+        }
+        .message-input {
+            flex: 1;
+            padding: 10px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 40px;
+            font-size: 14px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 40px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        button:disabled {
+            opacity: 0.5;
+        }
+        .controls {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-top: 12px;
+        }
+        .status {
+            background: #f1f5f9;
+            padding: 8px 16px;
+            border-radius: 40px;
+            text-align: center;
+            font-size: 13px;
+        }
+       .connection-controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .connection-controls button,
+        .connection-controls input {
+            height: 44px; /* фиксированная высота */
+            box-sizing: border-box;
+            padding: 0 16px;
+            font-size: 14px;
+            line-height: 1;
+        }
+
+        /* Для мобильных устройств можно уменьшить высоту */
+        @media (max-width: 600px) {
+            .connection-controls button,
+            .connection-controls input {
+                height: 40px;
+                padding: 0 12px;
+            }
+            
+            #roomIdInput {
+                width: 100%; /* на мобилках поле растягивается */
+            }
+        }
+        .room-code {
+            font-size: 28px;
+            font-weight: bold;
+            font-family: monospace;
+            background: #1e293b;
+            color: #3b82f6;
+            padding: 8px 16px;
+            border-radius: 12px;
+            letter-spacing: 2px;
+        }
+        .copy-btn {
+            background: #64748b;
+            padding: 8px 16px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="video-grid">
+        <div class="video-card">
+            <video id="localVideo" autoplay muted playsinline></video>
+            <div class="video-label">📹 Вы</div>
+        </div>
+        <div class="video-card">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <div class="video-label">👤 Собеседник</div>
+        </div>
+    </div>
+
+    <div class="connection-controls">
+        <button id="createRoomBtn" style="background: #10b981;">🚀 Создать комнату</button>
+        <div id="roomCodeDisplay" style="display: none;">
+            <span class="room-code" id="roomCodeValue"></span>
+            <button id="copyRoomBtn" class="copy-btn">📋 Копировать</button>
+        </div>
+        <input type="text" id="roomIdInput" placeholder="Введите код комнаты" style="padding: 0 16px; border-radius: 40px; border: 1px solid #ccc; width: 200px;">
+        <button id="joinRoomBtn" style="background: #3b82f6;">🔗 Подключиться</button>
+    </div>
+
+    <div class="controls">
+        <button id="toggleAudioBtn">🎙️ Выкл микрофон</button>
+        <button id="toggleVideoBtn">📷 Выкл камеру</button>
+    </div>
+
+    <div class="chat-panel">
+        <div class="messages-area" id="messagesArea">
+            <div class="system-message">✨ Создайте комнату или введите код для подключения</div>
+        </div>
+        <div class="input-area">
+            <input type="text" class="message-input" id="messageInput" placeholder="Введите сообщение..." disabled>
+            <button id="sendBtn" disabled>📤 Отправить</button>
+        </div>
+    </div>
+    <div class="status" id="statusArea">🟡 Статус: Ожидание действия...</div>
+</div>
+
+ 
+<script>
+    // --- Элементы DOM ---
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const messagesArea = document.getElementById('messagesArea');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const statusSpan = document.getElementById('statusArea');
+    const toggleAudioBtn = document.getElementById('toggleAudioBtn');
+    const toggleVideoBtn = document.getElementById('toggleVideoBtn');
+    const createRoomBtn = document.getElementById('createRoomBtn');
+    const joinRoomBtn = document.getElementById('joinRoomBtn');
+    const roomIdInput = document.getElementById('roomIdInput');
+    const roomCodeDisplay = document.getElementById('roomCodeDisplay');
+    const roomCodeValue = document.getElementById('roomCodeValue');
+    const copyRoomBtn = document.getElementById('copyRoomBtn');
+
+    // --- Состояние ---
+    let localStream = null;
+    let peerConnection = null;
+    let dataChannel = null;
+    let mqttClient = null;
+    let currentRoomId = null;
+    let isInitiator = false;
+    let isAudioEnabled = true;
+    let isVideoEnabled = true;
+    let isChannelOpen = false;
+    let myUserId = null;
+    let remoteUserId = null;
+    let pendingMessages = [];
+    let pendingCandidates = [];
+
+    // STUN/TURN конфигурация
+   const configuration = {
+    iceServers: [
+        // ✅ 2 STUN сервера достаточно (основной + резервный)
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        
+        // ✅ 1 TURN сервер 
+        { 
+            urls: [
+                "turn:global.relay.metered.ca:3478?transport=udp",  // UDP приоритет
+                "turns:global.relay.metered.ca:443?transport=tcp"    // TCP/TLS резерв
+            ],
+            username: "5cffd0dd39a33f11bd2082fd",
+            credential: "d54/s+ONyTQLDKyZ"
+        }
+    ],
+    iceCandidatePoolSize: 5  
+};
+
+    // --- Вспомогательные функции ---
+    function addSystemMessage(text, isError = false) {
+        const div = document.createElement('div');
+        div.className = 'system-message';
+        div.style.background = isError ? '#fee2e2' : '#e2e8f0';
+        div.style.color = isError ? '#991b1b' : '#475569';
+        div.textContent = text;
+        messagesArea.appendChild(div);
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+        console.log('[SYSTEM]', text);
+    }
+
+    function addChatMessage(text, isSent) {
+        const div = document.createElement('div');
+        div.className = `message ${isSent ? 'message-sent' : 'message-received'}`;
+        div.textContent = text;
+        messagesArea.appendChild(div);
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+    }
+
+    function updateStatus(text) {
+        statusSpan.textContent = text;
+    }
+
+    // --- Получение доступа к камере ---
+    async function getMedia() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localStream = stream;
+            localVideo.srcObject = stream;
+            updateStatus('✅ Медиа получено');
+            addSystemMessage('✅ Доступ к камере и микрофону получен');
+            return true;
+        } catch (err) {
+            console.error('Media error:', err);
+            let errorMsg = '❌ Ошибка доступа: ';
+            if (err.name === 'NotAllowedError') errorMsg += 'Разрешите доступ в браузере';
+            else if (err.name === 'NotFoundError') errorMsg += 'Камера или микрофон не найдены';
+            else errorMsg += err.message;
+            addSystemMessage(errorMsg, true);
+            updateStatus(errorMsg);
+            return false;
+        }
+    }
+
+    // --- WebRTC PeerConnection ---
+  
+    async function createPeerConnection() {
+        if (peerConnection) {
+            peerConnection.close();
+        }
+        
+        peerConnection = new RTCPeerConnection(configuration);
+        
+        if (localStream) {
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+        }
+        
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+               if( peerConnection.localDescription ){
+                    sendToRemote({
+                        type: 'candidate',
+                        candidate: event.candidate
+                    });
+                }
+            }
+        };
+        
+        peerConnection.ontrack = (event) => {
+            addSystemMessage('📡 Получен видео/аудио поток');
+            remoteVideo.srcObject = event.streams[0];
+            
+        };
+        
+        peerConnection.oniceconnectionstatechange = () => {
+            const state = peerConnection.iceConnectionState;
+            console.log('ICE state:', state);
+            if (state === 'connected' || state === 'completed') {
+                updateStatus('✅ P2P соединение установлено!');
+                addSystemMessage('🎉 P2P соединение установлено!');
+                enableChat(true);
+            } else if (state === 'failed') {
+                updateStatus('❌ ICE соединение не удалось');
+                addSystemMessage('❌ Соединение не удалось. Проверьте интернет-соединение.', true);
+            }
+        };
+        
+        if (isInitiator) {
+            dataChannel = peerConnection.createDataChannel('chat');
+            setupDataChannel(dataChannel);
+        }
+        
+        peerConnection.ondatachannel = (event) => {
+            dataChannel = event.channel;
+            setupDataChannel(dataChannel);
+        };
+        
+        return peerConnection;
+    }
+    
+    function setupDataChannel(channel) {
+        channel.onopen = () => {
+            isChannelOpen = true;
+            addSystemMessage('💬 Канал чата открыт');
+            enableChat(true);
+            // Отправляем накопленные сообщения
+            while (pendingMessages.length) {
+                channel.send(pendingMessages.shift());
+            }
+        };
+        
+        channel.onclose = () => {
+            isChannelOpen = false;
+            addSystemMessage('🔌 Канал чата закрыт');
+            enableChat(false);
+        };
+        
+        channel.onmessage = (event) => {
+            addChatMessage(event.data, false);
+        };
+    }
+    
+    function enableChat(enabled) {
+        messageInput.disabled = !enabled;
+        sendBtn.disabled = !enabled;
+    }
+    
+    // --- Отправка signalling сообщений через MQTT ---
+  
+     function sendToRemote(data) {
+        if (mqttClient && remoteUserId) {
+            const topic = `p2p/${currentRoomId}/peers`;
+            const message = JSON.stringify({
+                from: myUserId,
+                ...data
+            });
+            mqttClient.publish(topic, message);
+            console.log('📤 Sent to', remoteUserId, data.type);
+        }
+    }
+
+     async function initMQTT(roomId, initiatorMode, userId) {
+        myUserId = userId;
+        currentRoomId = roomId;
+        isInitiator = initiatorMode;
+        
+        // Подключаемся к публичному MQTT брокеру
+        const mqttUrl = 'ws://broker.emqx.io:8083/mqtt';
+        const peerTopic = `p2p/${roomId}/peers`;
+        return new Promise((resolve, reject) => {
+            mqttClient = mqtt.connect(mqttUrl, {
+                clientId: `web_p2p_${userId}`,
+                clean: true,
+                reconnectPeriod: 3000,
+                connectTimeout: 30000
+            });
+            
+            const timeout = setTimeout(() => {
+                reject(new Error('MQTT connection timeout'));
+            }, 15000);
+            
+            mqttClient.on('connect', () => {
+                clearTimeout(timeout);
+                addSystemMessage(`📡 Подключен к MQTT брокеру (комната: ${roomId})`);
+                
+          
+                mqttClient.subscribe(peerTopic, (err) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+                    addSystemMessage(`📡 Слушаю канал: ${peerTopic}`);
+                    
+                    // Если мы инициатор, также публикуем информацию о себе
+                      
+                   setTimeout(() => {
+                    mqttClient.publish(peerTopic, JSON.stringify({
+                        type: 'peer_announce',
+                        userId: myUserId,
+                        isInitiator: isInitiator,
+                        timestamp: Date.now()
+                    }));
+                    
+                    addSystemMessage(`📢 Опубликовал announce как ${isInitiator ? 'инициатор' : 'ответчик'}`);
+                }, 500);
+                    resolve();
+                });
+            });
+            
+            mqttClient.on('error', (err) => {
+                clearTimeout(timeout);
+                reject(err);
+            });
+            
+            mqttClient.on('message', async (topic, message) => {
+                try {
+                    const data = JSON.parse(message.toString());
+                    // Обработка объявления пира (только для ответчика)
+                    console.log('📨 Получено:', data.type, 'от:', data.userId || data.from);
+                
+                    // ✅ Обработка объявления пира
+                    if (data.type === 'peer_announce' && !remoteUserId) {
+                        remoteUserId = data.userId;
+                        addSystemMessage(`👤 Найден ${data.isInitiator ? 'инициатор' : 'ответчик'}: ${remoteUserId.substring(0, 8)}`);
+                        
+                        if (!isInitiator) {
+                            // Ответчик: отправляем peer_ready
+                            addSystemMessage(`📤 Отправляю peer_ready инициатору...`);
+                            mqttClient.publish(peerTopic, JSON.stringify({
+                                type: 'peer_ready',
+                                from: myUserId,
+                                to: data.userId
+                            }));
+                        }
+                    }
+                    
+                    // ✅ Обработка готовности ответчика (ВАЖНО: НЕТ ПРОВЕРКИ remoteUserId)
+                    if (data.type === 'peer_ready' && isInitiator) {
+                        if (!remoteUserId) {
+                            remoteUserId = data.from;
+                            addSystemMessage(`👤 Ответчик готов: ${remoteUserId.substring(0, 8)}`);
+                        }
+                        // ✅ ВСЕГДА отправляем offer, когда получаем peer_ready
+                        addSystemMessage(`🚀 Инициатор отправляет offer...`);
+                        await createAndSendOffer();
+                    }
+                    
+                    // Обработка signalling сообщений
+                    if (data.type === 'offer' && !isInitiator /* && data.from === remoteUserId */) {
+                        addSystemMessage(`📥 Получен Offer`);
+                        await handleRemoteOffer(data);
+                    }
+                    else if (data.type === 'answer' && isInitiator /* && data.from === remoteUserId */) {
+                        addSystemMessage(`📥 Получен Answer`);
+                        await handleRemoteAnswer(data);
+                    }
+                    else if (data.type === 'candidate' /*&& data.from === remoteUserId*/) {
+                         addSystemMessage(`📥 Получен candidate`);
+                        await handleRemoteCandidate(data);
+                    }
+                    
+                } catch (e) {
+                    console.error('MQTT message error:', e);
+                }
+            });
+        });
+    }
+
+       
+    async function createAndSendOffer() {
+        try {
+            await createPeerConnection();
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            
+            sendToRemote({
+                type: 'offer',
+                offer: offer
+            });
+
+                      
+            addSystemMessage('📤 Offer отправлен ответчику');
+        } catch (err) {
+            console.error('Create offer error:', err);
+            addSystemMessage(`❌ Ошибка создания Offer: ${err.message}`, true);
+        }
+    }
+    
+    async function handleRemoteOffer(data) {
+        try {
+            if (!peerConnection) {
+                await createPeerConnection();
+            }
+            
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+            
+            // Добавляем накопленные кандидаты
+            if (pendingCandidates.length > 0) {
+                console.log(`📦 Добавляем ${pendingCandidates.length} накопленных кандидатов`);
+                for (const candidate of pendingCandidates) {
+                    try {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                    } catch (err) {
+                        console.warn('Add pending candidate error:', err);
+                    }
+                }
+                pendingCandidates = [];
+            }
+            
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            sendToRemote({ type: 'answer', answer: answer });
+        } catch (err) {
+            console.error('Handle offer error:', err);
+        }
+    }
+    
+    async function handleRemoteAnswer(data) {
+        try {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+            addSystemMessage('✅ Answer установлен, соединение настраивается...');
+        } catch (err) {
+            console.error('Handle answer error:', err);
+            addSystemMessage(`❌ Ошибка обработки Answer: ${err.message}`, true);
+        }
+    }
+    
+  
+    // Исправленная функция handleRemoteCandidate
+    async function handleRemoteCandidate(data) {
+        if (!peerConnection) return;
+        
+        if (!peerConnection.remoteDescription) {
+            console.log('⏳ Сохраняем кандидата до установки RemoteDescription');
+            if (data.candidate) pendingCandidates.push(data.candidate);
+            return;
+        }
+        
+        try {
+            if (data.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+        } catch (err) {
+            // Игнорируем ошибки с ufrag и отсутствием remoteDescription
+            if (!err.message.includes('Unknown ufrag') && 
+                !err.message.includes('No remoteDescription')) {
+                console.warn('Add ICE candidate error:', err);
+            }
+        }
+    }
+    
+    // --- Создание комнаты (инициатор) ---
+    async function createRoom() {
+        const mediaOk = await getMedia();
+        if (!mediaOk) return;
+        
+        const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const userId = `init_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        
+        currentRoomId = roomId;
+        roomCodeValue.textContent = roomId;
+        roomCodeDisplay.style.display = 'flex';
+        roomCodeDisplay.style.gap = '10px';
+        roomCodeDisplay.style.alignItems = 'center';
+        
+        addSystemMessage(`🚀 Создана комната: ${roomId}`);
+        addSystemMessage(`📋 Отправьте этот код собеседнику: ${roomId}`);
+        updateStatus(`🟢 Код комнаты: ${roomId} (ожидание подключения...)`);
+        
+        roomIdInput.value = roomId;
+        
+        try {
+            await initMQTT(roomId, true, userId);
+            addSystemMessage('📡 Ожидание подключения ответчика...');
+        } catch (err) {
+            console.error('MQTT error:', err);
+            addSystemMessage(`❌ Ошибка подключения к MQTT: ${err.message}`, true);
+        }
+    }
+    
+    // --- Подключение к комнате (ответчик) ---
+    async function joinRoom() {
+        const roomId = roomIdInput.value.trim().toUpperCase();
+        if (!roomId) {
+            addSystemMessage('❌ Введите код комнаты', true);
+            return;
+        }
+        
+        const mediaOk = await getMedia();
+        if (!mediaOk) return;
+        
+        const userId = `resp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        currentRoomId = roomId;
+        
+        addSystemMessage(`🔗 Подключение к комнате: ${roomId}`);
+        updateStatus(`🟡 Подключение к комнате ${roomId}...`);
+        
+        try {
+            await initMQTT(roomId, false, userId);
+            addSystemMessage('📡 Ожидание Offer от инициатора...');
+        } catch (err) {
+            console.error('MQTT error:', err);
+            addSystemMessage(`❌ Ошибка подключения к MQTT: ${err.message}`, true);
+        }
+    }
+    
+    // --- Отправка сообщения в чат ---
+    function sendMessage() {
+        const text = messageInput.value.trim();
+        if (text) {
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(text);
+                addChatMessage(text, true);
+                messageInput.value = '';
+            } else {
+                pendingMessages.push(text);
+                addSystemMessage('⏳ Канал еще не открыт, сообщение будет отправлено позже');
+                messageInput.value = '';
+            }
+        }
+    }
+    
+    // --- Управление микрофоном и камерой ---
+    function toggleAudio() {
+        if (localStream) {
+            const audioTracks = localStream.getAudioTracks();
+            if (audioTracks.length) {
+                isAudioEnabled = !isAudioEnabled;
+                audioTracks[0].enabled = isAudioEnabled;
+                toggleAudioBtn.textContent = isAudioEnabled ? '🎙️ Выкл микрофон' : '🔇 Вкл микрофон';
+                addSystemMessage(isAudioEnabled ? '🎤 Микрофон включён' : '🔇 Микрофон выключен');
+            }
+        }
+    }
+    
+    function toggleVideo() {
+        if (localStream) {
+            const videoTracks = localStream.getVideoTracks();
+            if (videoTracks.length) {
+                isVideoEnabled = !isVideoEnabled;
+                videoTracks[0].enabled = isVideoEnabled;
+                toggleVideoBtn.textContent = isVideoEnabled ? '📷 Выкл камеру' : '📷 Вкл камеру';
+                addSystemMessage(isVideoEnabled ? '📷 Камера включена' : '📷 Камера выключена');
+            }
+        }
+    }
+    
+    function copyRoomCode() {
+        navigator.clipboard.writeText(currentRoomId);
+        addSystemMessage('✅ Код комнаты скопирован');
+    }
+    
+    // --- Назначение обработчиков ---
+    createRoomBtn.onclick = createRoom;
+    joinRoomBtn.onclick = joinRoom;
+    sendBtn.onclick = sendMessage;
+    toggleAudioBtn.onclick = toggleAudio;
+    toggleVideoBtn.onclick = toggleVideo;
+    copyRoomBtn.onclick = copyRoomCode;
+    
+    messageInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+    
+    // Загружаем MQTT библиотеку
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/mqtt@5.0.0/dist/mqtt.min.js';
+    script.onload = () => {
+        addSystemMessage('✅ Библиотека MQTT загружена');
+        updateStatus('🟡 Введите код комнаты или создайте новую');
+    };
+    script.onerror = () => {
+        addSystemMessage('❌ Ошибка загрузки MQTT библиотеки, проверьте интернет', true);
+    };
+    document.head.appendChild(script);
+    
+    // Обработка закрытия
+    window.addEventListener('beforeunload', () => {
+        if (peerConnection) peerConnection.close();
+        if (mqttClient) mqttClient.end();
+        if (localStream) localStream.getTracks().forEach(track => track.stop());
+    });
+</script>
+</body>
+</html>
